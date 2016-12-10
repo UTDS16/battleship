@@ -17,8 +17,8 @@ class Client():
 	def init_mq(self):
 		self.q_connection = pika.BlockingConnection(pika.ConnectionParameters("localhost"))
 		self.q_channel = self.q_connection.channel()
-		self.q_state = self.q_channel.queue_declare(queue="lobby", passive=True)
-		self.q_channel.basic_consume(self.mq_callback, queue="lobby", no_ack=True)
+		self.q_state = self.q_channel.queue_declare(queue="lobby")
+		self.q_channel.basic_consume(self.mq_callback, queue="lobby")
 
 	def mq_callback(self, ch, method, properties, body):
 		print(" RECV: %r" % body)
@@ -42,8 +42,7 @@ class Client():
 					print("Message sent")
 
 				# Iterative processing on a blocking connection.
-				if self.q_channel._consumer_infos:
-					self.q_channel.connection.process_data_events(time_limit=0)
+				self.q_connection.process_data_events(time_limit=0)
 
 				self.fps_timer.tick(self.fps_limit)
 		except Exception as e:
