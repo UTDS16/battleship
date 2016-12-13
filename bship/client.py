@@ -3,6 +3,7 @@ import pika
 import sys, pygame
 import logging
 import board.board as bb
+import player as bp
 
 def init_logging():
 	"""
@@ -30,6 +31,8 @@ class Client():
 		self.fps_limit = 30.0
 
 		self.gameboard = bb.GameBoard()
+		self.player = bp.Player()
+		self.player.start_placing_ships()
 
 		self.log.info("Initializing PyGame")
 		pygame.init()
@@ -81,18 +84,31 @@ class Client():
 
 			self.online = True
 			while self.online:
-				gameboard = self.gameboard.render()
-				self.window.blit(gameboard, (16, 16))
+				s_board = self.gameboard.render()
+
+				if self.player.is_placing_ships():
+					mpos = pygame.mouse.get_pos()
+					mpos = (mpos[0] - 16, mpos[1] - 16)
+					self.gameboard.update_cursor(self.player, mpos)
+					self.gameboard.render_cursor(s_board, self.player)
+
+				self.window.blit(s_board, (16, 16))
 
 				for event in pygame.event.get():
 					if event.type == pygame.QUIT:
 						self.online = False
+					elif event.type == pygame.MOUSEBUTTONDOWN:
+						if event.button == 1:
+							self.gameboard.clicked(self.player, mpos)
+					elif event.type == pygame.KEYDOWN:
+						if event.key == pygame.K_SPACE:
+							self.gameboard.rotate_ship()
+						elif event.key == pygame.K_RETURN:
+							self.q_channel.basic_publish(exchange="", routing_key="lobby", body="Dummy Server")
+							print("Message sent")
 
 				if pygame.key.get_pressed()[pygame.K_ESCAPE]:
 					self.online = False
-				elif pygame.key.get_pressed()[pygame.K_SPACE]:
-					self.q_channel.basic_publish(exchange="", routing_key="lobby", body="Dummy Server")
-					print("Message sent")
 
 				# Iterative processing on a blocking connection.
 				self.q_connection.process_data_events(time_limit=0)

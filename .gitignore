@@ -87,3 +87,9 @@ ENV/
 
 # Rope project settings
 .ropeproject
+
+# Vim
+*.swp
+
+# Logs
+log.txt
