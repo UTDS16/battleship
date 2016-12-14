@@ -1,12 +1,20 @@
 #!/usr/bin/python
 import pika
+import uuid, time
+import pickle
 import sys, pygame
 import logging
+from collections import OrderedDict
+
 import ocempgui.widgets as ow
 import ocempgui.widgets.Constants as oc
 import ocempgui.events as oe
+
 import board.board as bb
-import player as bp
+import protocol as bp
+import player as bpl
+import endpoints as ep
+from gui.lobby_list_item import LobbyListItem
 
 def init_logging():
 	"""
@@ -26,22 +34,32 @@ def init_logging():
 
 	return log
 
-class Client(oe.INotifyable):
+class Client():
 	S_LOBBY = 0
 	S_CREATE = 1
 	S_JOIN = 2
 	S_GAME = 3
 
+	MSG_TIMEOUT = 3
+
+	# It seems that USEREVENT + 1 is already taken.
+	# Anyway, an event for server announces.
+	E_ANNOUNCE = pygame.USEREVENT + 2
+
+	M_ANNOUNCE = 0
+
 	def __init__(self):
 		self.init_log("BShip")
 		self.online = False
 		self.state = Client.S_LOBBY
+		self.am_server = False
 		self.window = None
 		self.fps_limit = 30.0
 
-		self.gameboard = bb.GameBoard()
-		self.player = bp.Player()
-		self.player.start_placing_ships()
+		self.uuid = str(uuid.uuid4())
+		self.log.info("UUID: " + self.uuid)
+
+		self.server_list = OrderedDict()
 
 		self.log.info("Initializing PyGame")
 		pygame.init()
@@ -84,6 +102,21 @@ class Client(oe.INotifyable):
 		self.state = Client.S_GAME
 		self.gfx_hide_all()
 		self.renderer.color = (0, 0, 0, 0)
+		self.am_server = True
+
+		# Number of players in the game.
+		self.num_players = (1, int(self.e_players.text))
+		# Name of the game in the lobby list.
+		self.game_name = self.e_gamename.text
+
+		# Initialize game board.
+		self.gameboard = bb.GameBoard(int(self.e_boardw.text), int(self.e_boardh.text))
+		# Initialize ourselves (player).
+		self.player = bpl.Player()
+		self.player.start_placing_ships()
+
+		# Announce the game in the lobby.
+		pygame.time.set_timer(Client.E_ANNOUNCE, 1000)
 
 	def do_join_game(self):
 		"""
@@ -92,6 +125,13 @@ class Client(oe.INotifyable):
 		self.state = Client.S_GAME
 		self.gfx_hide_all()
 		self.renderer.color = (0, 0, 0, 0)
+	
+		self.gameboard = bb.GameBoard()
+		self.player = bp.Player()
+		self.player.start_placing_ships()
+
+		# TODO;: Determine number of players.
+		self.num_players = (1, 2)
 
 	def gfx_hide_all(self):
 		"""
@@ -185,7 +225,6 @@ class Client(oe.INotifyable):
 		self.renderer.add_widget(self.b_create)
 		self.renderer.add_widget(self.b_cancel)
 
-
 	def init_gfx(self):
 		"""
 		Initialize graphics.
@@ -214,12 +253,51 @@ class Client(oe.INotifyable):
 		self.q_state = self.q_channel.queue_declare(queue="lobby")
 		self.q_channel.basic_consume(self.mq_callback, queue="lobby")
 
+	def do_announce(self):
+		self.log.debug("Announcing game server")
+
+		# TODO:: Move to a protocol module
+		msg_dict = {
+				"id": self.M_ANNOUNCE,
+				"uuid": self.uuid,
+				"boardsize": (self.gameboard.w, self.gameboard.h),
+				"num_players": self.num_players,
+				"name": self.game_name
+				}
+		msg = bp.Message.pickle(msg_dict)
+		self.q_channel.basic_publish(exchange="", routing_key="lobby", body=msg)
+
 	def mq_callback(self, ch, method, properties, body):
-		print(" RECV: %r" % body)
+		# TODO:: Have a timestamp field as well, and check against current time.
+
+		try:
+			msg = bp.Message.unpickle(body)
+
+			# Skip stale messages.
+			if hasattr(msg, "timestamp") and time.time() - msg.timestamp < Client.MSG_TIMEOUT:
+				if msg.id == self.M_ANNOUNCE:
+					self.server_list[msg.uuid] = msg
+		except ValueError as e:
+			# Ignore "insecure string pickle",
+			# which comes from incompatible. 
+			pass
+		except Exception as e:
+			self.log.exception(e)
 	
-	def notify(self, event):
-		print(event)
-	
+	def process_serverlist(self):
+		"""
+		Process the announcements collected from the message queue.
+		"""
+		num_servers = 0
+		for key, val in self.server_list.iteritems():
+			# Either update an existing list item.
+			if len(self.li_servers.items) > 0 and num_servers < len(self.li_servers.items):
+				self.li_servers.items[num_servers].set_server(val)
+			# Or create a new one.
+			else:
+				self.li_servers.items.append(LobbyListItem(val))
+			num_servers += 1
+
 	def start(self):
 		"""
 		Start the game.
@@ -232,8 +310,11 @@ class Client(oe.INotifyable):
 
 			self.online = True
 			while self.online:
+				# Process server list while in the lobby,
+				if self.state == Client.S_LOBBY:
+					self.process_serverlist()
 				# Render gameboard, if in the right mode.
-				if self.state == Client.S_GAME:
+				elif self.state == Client.S_GAME:
 					s_board = self.gameboard.render()
 
 					if self.player.is_placing_ships():
@@ -251,6 +332,8 @@ class Client(oe.INotifyable):
 				for event in pygame.event.get():
 					if event.type == pygame.QUIT:
 						self.online = False
+					elif event.type == Client.E_ANNOUNCE:
+						self.do_announce()
 					else:
 						# In game state?
 						if self.state == Client.S_GAME:
@@ -260,9 +343,6 @@ class Client(oe.INotifyable):
 								if event.key == pygame.K_SPACE:
 									self.gameboard.rotate_ship()
 						
-						#if event.key == pygame.K_RETURN:
-						#	self.q_channel.basic_publish(exchange="", routing_key="lobby", body="Dummy Server")
-						#	print("Message sent")
 					# Pass the event to OcempGUI
 					self.renderer.distribute_events((event))
 
