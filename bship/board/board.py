@@ -153,7 +153,11 @@ class GameBoard():
 		self.dump()
 	
 	def clicked(self, player, pos):
+		"""
+		Event handler for gameboard clicks.
+		"""
 		try:
+			print "Clicked"
 			if player.is_placing_ships():
 				self.place_ship(player.current_ship(), 
 						self.cur_pos[0], self.cur_pos[1], self.cur_orient)
@@ -163,6 +167,9 @@ class GameBoard():
 			# TODO:: Produce a sound effect and display the error in GUI.
 
 	def rotate_ship(self):
+		"""
+		Rotate the ship cursor.
+		"""
 		if self.cur_orient == GameBoard.O_HORIZONTAL:
 			self.cur_orient = GameBoard.O_VERTICAL
 		else:
@@ -195,6 +202,9 @@ class GameBoard():
 		pygame.draw.rect(surface, color, (ax, ay, sx, sy), 1)
 
 	def render_tiles(self, surface, tiles, pos):
+		"""
+		Render board tiles.
+		"""
 		# TODO:: Make it scalable.
 
 		tsize = bt.Tile.SIZE
@@ -213,6 +223,10 @@ class GameBoard():
 				pos, (self.w * tsize, self.h * tsize))
 
 	def update_cursor(self, player, pos):
+		"""
+		Update cursor position and the size of the highlight rectangle
+		that follows the cursor.
+		"""
 		tsize = bt.Tile.SIZE
 		cpos = (pos[0] / tsize, pos[1] / tsize)
 
@@ -246,6 +260,9 @@ class GameBoard():
 				self.cur_pos = cpos
 
 	def render_cursor(self, surface, player):
+		"""
+		Render a highlight rectangle around the imaginary ship to be placed.
+		"""
 		color = (255, 255, 255, 0)
 		ship = player.current_ship()
 
@@ -259,6 +276,32 @@ class GameBoard():
 		pygame.draw.rect(
 				surface, color,
 				ship.rect(), 1)
+	
+	def update_crosshair(self, pos):
+		tsize = bt.Tile.SIZE
+		cpos = (pos[0] / tsize, pos[1] / tsize)
+
+		self.cur_pos = None
+
+		if cpos[0] < self.w + 1:
+			cpos = (self.w + 1, cpos[1])
+		elif cpos[0] > 2 * self.w:
+			cpos = (2 * self.w, cpos[1])
+		if cpos[1] < 0:
+			cpos = (cpos[0], 0)
+		elif cpos[1] > self.h:
+			cpos = (cpos[0], self.h - 1)
+		self.cur_pos = cpos
+
+	def render_crosshair(self, surface):
+		color = (255, 20, 0, 0)
+
+		if self.cur_pos != None:
+			rect = (self.cur_pos[0], self.cur_pos[1], bt.Tile.SIZE, bt.Tile.SIZE)
+			pygame.draw.rect(
+					surface, color,
+					rect, 1)
+
 
 	def render(self):
 		"""

@@ -16,3 +16,11 @@ S_CREATE = 1
 S_JOIN = 2
 # Player in the game.
 S_GAME = 3
+# Player in the game, placing ships.
+S_GAME_PLACING = 4
+# Player in the game, waiting for their turn.
+S_GAME_WAITING = 5
+# Player's turn, cherry-picking the tile to bomb.
+S_GAME_SHOOTING = 6
+
+S_GAME_LAST = 6

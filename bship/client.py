@@ -59,6 +59,10 @@ class Client():
 		self.server_list = OrderedDict()
 		# List of players.
 		self.player_list = []
+		# Number of players still placing ships.
+		self.num_players_busy = 0
+		# Index of the player, whose turn was last.
+		self.num_last_player = 0
 
 		self.log.info("Initializing PyGame")
 		pygame.init()
@@ -215,15 +219,46 @@ class Client():
 								# Notify the client as well.
 								self.nack(msg.client_uuid, "Server: Nickname collision", be.S_LOBBY)
 								return
-
+						# Add the player.
 						self.log.info("Adding player {} ({})".format(msg.client_uuid, msg.nickname))
-						self.player_list.append([msg.client_uuid, msg.nickname])
+						self.player_list.append([msg.client_uuid, msg.nickname, be.S_GAME_PLACING, time.time()])
 						self.ack(msg.client_uuid, "Server: Welcome", be.S_GAME)
-				# Our request was acked?
+
+				# TODO:: Replace Request - Ack pairs with RPC or RabbitMQ exchanges.
+
+				# An acknowledge message.
 				elif msg.id == bp.M_ACK:
 					self.log.info("Received ACK: " + msg.message)
+					# We've joined?
 					if self.state == be.S_JOIN and msg.state == be.S_GAME:
 						self.gui.do_start_joined()
+					# There's one more player waiting for their turn.
+					elif self.state == be.S_GAME and msg.state == be.S_GAME_WAITING:
+						self.num_players_busy = 0
+						for i in range(len(self.player_list)):
+							p = self.player_list[i]
+							if p[0] == msg.client_uuid:
+								self.player_list[i][2] = be.S_GAME_WAITING
+								break
+							elif p[2] != be.S_GAME_WAITING:
+								self.num_players_busy += 1
+
+						# TODO:: Timeout check here. Or implement client heartbeat.
+
+						# All players are waiting for their turn?
+						if self.num_players_busy == 0:
+							p = self.player_list[self.num_last_player]
+							p[2] = be.S_GAME_SHOOTING
+							self.log.info("Player {}'s turn".format(p[0]))
+							self.ack(p[0], "Server: Your turn", p[2])
+
+							# Cycle through the players.
+							self.num_last_player += 1
+							if self.num_last_player >= self.num_players:
+								self.num_last_player = 0
+					# It's our turn?
+					elif self.state == be.S_GAME and msg.state == be.S_GAME_SHOOTING:
+						self.state = msg.state
 				# Our request was withdrawn?
 				elif msg.id == bp.M_NACK:
 					self.log.error("Received NACK: " + msg.message)
@@ -253,14 +288,26 @@ class Client():
 				if self.state == be.S_LOBBY:
 					self.gui.process_serverlist(self.server_list)
 				# Render gameboard, if in the right mode.
-				elif self.state == be.S_GAME:
+				elif self.state >= be.S_GAME and self.state <= be.S_GAME_LAST:
 					s_board = self.gameboard.render()
 
 					if self.player.is_placing_ships():
+						self.state = be.S_GAME_PLACING
 						mpos = pygame.mouse.get_pos()
 						mpos = (mpos[0] - 16, mpos[1] - 16)
 						self.gameboard.update_cursor(self.player, mpos)
 						self.gameboard.render_cursor(s_board, self.player)
+					elif self.state == be.S_GAME_PLACING:
+						self.log.info("Finished placing ships")
+						self.state = be.S_GAME_WAITING
+						# Clients will wait for their turn, the server won't.
+						if not self.hosting:
+							self.ack(self.server_uuid, "Waiting for my turn", be.S_GAME_WAITING)
+					elif self.state == be.S_GAME_SHOOTING:
+						mpos = pygame.mouse.get_pos()
+						mpos = (mpos[0] - 16, mpos[1] - 16)
+						self.gameboard.update_crosshair(mpos)
+						self.gameboard.render_crosshair(s_board)
 
 					self.window.blit(s_board, (16, 16))
 
@@ -299,7 +346,7 @@ class Client():
 							self.request_join(event)
 					else:
 						# In game state?
-						if self.state == be.S_GAME:
+						if self.state >= be.S_GAME and self.state <= be.S_GAME_LAST:
 							if event.type == pygame.MOUSEBUTTONDOWN:
 								self.gameboard.clicked(self.player, mpos)
 							elif event.type == pygame.KEYDOWN:

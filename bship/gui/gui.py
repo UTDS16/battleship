@@ -87,7 +87,7 @@ class GUI():
 		self.f_tab.add_child(0, 1, self.e_gamename)
 
 		# Number of players.
-		self.e_players = ow.Entry("3")
+		self.e_players = ow.Entry("2")
 		self.l_players = ow.Label("Number of players: ")
 		self.f_tab.add_child(1, 0, self.l_players)
 		self.f_tab.add_child(1, 1, self.e_players)
