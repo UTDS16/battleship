@@ -35,14 +35,13 @@ def init_logging():
 	return log
 
 class Client():
-	S_LOBBY = 0
-	S_CREATE = 1
-	S_JOIN = 2
-	S_GAME = 3
+	"""
+	A client to the message queue.
+	Otherwise both a game server as well as client,
+	depending on the game mode.
+	"""
 
 	MSG_TIMEOUT = 3
-
-	M_ANNOUNCE = 0
 
 	def __init__(self):
 		self.init_log("BShip")
@@ -52,10 +51,14 @@ class Client():
 		self.window = None
 		self.fps_limit = 30.0
 
+		# Picka UUID.
 		self.uuid = str(uuid.uuid4())
 		self.log.info("UUID: " + self.uuid)
 
+		# List of servers by their UUID.
 		self.server_list = OrderedDict()
+		# List of players.
+		self.player_list = []
 
 		self.log.info("Initializing PyGame")
 		pygame.init()
@@ -82,14 +85,13 @@ class Client():
 		self.log.info("Initializing graphics")
 		self.event_manager = oe.EventManager()
 
-		# TODO:: Could use Frames
-
+		# Initialize the screen.
 		self.renderer = ow.Renderer()
 		self.renderer.create_screen(800, 600)
 		self.renderer.title = "Battleship Client"
-		self.renderer.color = (255, 255, 255, 0)
 		self.window = self.renderer.screen
 
+		# Initialize the GUI.
 		self.gui = GUI(self.renderer)
 		self.gui.show_lobby()
 
@@ -100,15 +102,22 @@ class Client():
 		self.log.info("Connecting to RabbitMQ")
 		self.q_connection = pika.BlockingConnection(pika.ConnectionParameters("localhost"))
 		self.q_channel = self.q_connection.channel()
+		# A lobby, which all servers and clients connect to.
 		self.q_state = self.q_channel.queue_declare(queue="lobby")
-		self.q_channel.basic_consume(self.mq_callback, queue="lobby")
+		self.q_channel.basic_consume(self.mq_lobby_cb, queue="lobby")
+		# Dedicated rooms for each game server and client.
+		self.q_room = self.q_channel.queue_declare(queue=self.uuid)
+		self.q_channel.basic_consume(self.mq_room_cb, queue=self.uuid)
 
 	def do_announce(self):
+		"""
+		Announce that there's a game server here.
+		"""
 		self.log.debug("Announcing game server")
 
 		# TODO:: Move to a protocol module
 		msg_dict = {
-				"id": self.M_ANNOUNCE,
+				"id": bp.M_ANNOUNCE,
 				"uuid": self.uuid,
 				"boardsize": (self.gameboard.w, self.gameboard.h),
 				"num_players": self.num_players,
@@ -117,15 +126,65 @@ class Client():
 		msg = bp.Message.pickle(msg_dict)
 		self.q_channel.basic_publish(exchange="", routing_key="lobby", body=msg)
 
-	def mq_callback(self, ch, method, properties, body):
-		# TODO:: Have a timestamp field as well, and check against current time.
+	def request_join(self, event):
+		"""
+		Request for joining a game server.
+		"""
+		self.log.debug("Sending a join request to {}".format(event.uuid))
 
+		self.server_uuid = event.uuid
+		self.game_name = event.name
+		self.nickname = event.nickname
+		msg_dict = {
+				"id": bp.M_JOINING,
+				"server_uuid": self.server_uuid,
+				"client_uuid": self.uuid,
+				"name": self.game_name,
+				"nickname": self.nickname
+				}
+		msg = bp.Message.pickle(msg_dict)
+		self.q_channel.basic_publish(exchange="", routing_key=self.server_uuid, body=msg)
+
+		# TODO:: Time out on the request, and return to the lobby.
+
+	def ack(self, uuid, message, state):
+		"""
+		Generic request acknowledged message.
+		"""
+		msg_dict = {
+				"id": bp.M_ACK,
+				"server_uuid": self.uuid,
+				"client_uuid": uuid,
+				"message": message,
+				"state": state
+				}
+		msg = bp.Message.pickle(msg_dict)
+		self.q_channel.basic_publish(exchange="", routing_key=uuid, body=msg)
+
+	def nack(self, uuid, message, state):
+		"""
+		Generic error message.
+		"""
+		msg_dict = {
+				"id": bp.M_NACK,
+				"server_uuid": self.uuid,
+				"client_uuid": uuid,
+				"message": message,
+				"state": state
+				}
+		msg = bp.Message.pickle(msg_dict)
+		self.q_channel.basic_publish(exchange="", routing_key=uuid, body=msg)
+
+	def mq_lobby_cb(self, ch, method, properties, body):
+		"""
+		Handle lobby message queue events.
+		"""
 		try:
 			msg = bp.Message.unpickle(body)
 
 			# Skip stale messages.
 			if hasattr(msg, "timestamp") and time.time() - msg.timestamp < Client.MSG_TIMEOUT:
-				if msg.id == self.M_ANNOUNCE:
+				if msg.id == bp.M_ANNOUNCE:
 					self.server_list[msg.uuid] = msg
 		except ValueError as e:
 			# Ignore "insecure string pickle",
@@ -133,7 +192,51 @@ class Client():
 			pass
 		except Exception as e:
 			self.log.exception(e)
-	
+
+	def mq_room_cb(self, ch, method, properties, body):
+		"""
+		Handle room message queue events.
+		"""
+		try:
+			msg = bp.Message.unpickle(body)
+
+			# Skip stale messages.
+			if hasattr(msg, "timestamp") and time.time() - msg.timestamp < Client.MSG_TIMEOUT:
+				# Someone requests to join our server?
+				if msg.id == bp.M_JOINING and self.hosting:
+					if self.num_players[0] < self.num_players[1]:
+						self.num_players = (self.num_players[0] + 1, self.num_players[1])
+						for p in self.player_list:
+							if p[0] == msg.client_uuid or p[1] == msg.nickname:
+								if p[0] == msg.client_uuid:
+									self.log.error("UUID collision ({})".format(p[0]))
+								elif p[1] == msg.nickname:
+									self.log.error("Nickname collision ({})".format(p[1]))
+								# Notify the client as well.
+								self.nack(msg.client_uuid, "Server: Nickname collision", be.S_LOBBY)
+								return
+
+						self.log.info("Adding player {} ({})".format(msg.client_uuid, msg.nickname))
+						self.player_list.append([msg.client_uuid, msg.nickname])
+						self.ack(msg.client_uuid, "Server: Welcome", be.S_GAME)
+				# Our request was acked?
+				elif msg.id == bp.M_ACK:
+					self.log.info("Received ACK: " + msg.message)
+					if self.state == be.S_JOIN and msg.state == be.S_GAME:
+						self.gui.do_start_joined()
+				# Our request was withdrawn?
+				elif msg.id == bp.M_NACK:
+					self.log.error("Received NACK: " + msg.message)
+					if msg.state == be.S_LOBBY:
+						self.gui.do_lobby()
+					self.state = msg.state
+		except ValueError as e:
+			# Ignore "insecure string pickle",
+			# which comes from incompatible. 
+			pass
+		except Exception as e:
+			self.log.exception(e)
+
 	def start(self):
 		"""
 		Start the game.
@@ -187,11 +290,16 @@ class Client():
 									event.boardsize[0], event.boardsize[1])
 							self.num_players = event.num_players
 							# Initialize our player.
+							self.nickname = event.nickname
+							self.player_list.append([self.uuid, self.nickname])
 							self.player = bpl.Player()
 							self.player.start_placing_ships()
+						# Joining another game?
+						elif self.state == be.S_JOIN:
+							self.request_join(event)
 					else:
 						# In game state?
-						if self.state == Client.S_GAME:
+						if self.state == be.S_GAME:
 							if event.type == pygame.MOUSEBUTTONDOWN:
 								self.gameboard.clicked(self.player, mpos)
 							elif event.type == pygame.KEYDOWN:
@@ -216,6 +324,9 @@ class Client():
 			pygame.quit()
 
 def main():
+	"""
+	The grand main.
+	"""
 	client = Client()
 	client.start()
 

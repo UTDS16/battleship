@@ -15,6 +15,11 @@ class GUI():
 	def __init__(self, renderer):
 		self.renderer = renderer
 		self.lobby_visible = False
+		self.game_name = ""
+		self.boardsize = (10, 10)
+		self.num_players = (1, 3)
+
+		self.renderer.color = (255, 255, 255, 0)
 
 	def hide_all(self):
 		"""
@@ -105,7 +110,7 @@ class GUI():
 		# Cancel button.
 		self.b_create = ow.Button("Start Game")
 		self.b_create.topleft = (rect[2] - self.b_create.width, rect[3] - self.b_create.height)
-		self.b_create.connect_signal(oc.SIG_CLICKED, self.do_start_game)
+		self.b_create.connect_signal(oc.SIG_CLICKED, self.do_start_hosted)
 
 		# Add all the widgets.
 		self.renderer.add_widget(self.f_tab)
@@ -114,34 +119,40 @@ class GUI():
 
 	def do_lobby(self):
 		"""
-		Leave into the lobby.
+		Retreat back into the lobby.
 		"""
 		event = pygame.event.Event(be.E_STATE, {"state":be.S_LOBBY})
 		pygame.event.post(event)
 
 		self.hide_all()
 		self.show_lobby()
+		self.renderer.color = (255, 255, 255, 0)
 
 	def do_create_game(self):
 		"""
 		Display the game creation window.
 		"""
-		event = pygame.event.Event(be.E_STATE, {"state":be.S_CREATE})
-		pygame.event.post(event)
+		self.nickname = self.e_nickname.text
 
 		self.hide_all()
 		self.show_create()
-	
-	def do_start_game(self):
+		self.renderer.color = (255, 255, 255, 0)
+
+	def do_start_hosted(self):
 		"""
-		Start hosting the game.
+		Start the game in hosted mode.
 		"""
+		self.game_name = self.e_gamename.text
+		self.num_players = (1, int(self.e_players.text))
+		self.boardsize = (int(self.e_boardw.text), int(self.e_boardh.text))
+
 		d = {"state": be.S_GAME,
 				"hosting": True,
 				"uuid": None,
-				"name": self.e_gamename.text,
-				"num_players": (1, int(self.e_players.text)),
-				"boardsize": (int(self.e_boardw.text), int(self.e_boardh.text))}
+				"name": self.game_name,
+				"nickname": self.nickname,
+				"num_players": self.num_players,
+				"boardsize": self.boardsize}
 		event = pygame.event.Event(be.E_STATE, d)
 		pygame.event.post(event)
 
@@ -153,12 +164,36 @@ class GUI():
 		Join the selected game.
 		"""
 		item = self.li_servers.get_selected()[0]
+
+		self.nickname = self.e_nickname.text
+		self.server_uuid = item.server.uuid
+		self.game_name = item.server.name
+		self.num_players = item.server.num_players
+		self.boardsize = item.server.boardsize
+
+		d = {"state": be.S_JOIN,
+				"uuid": self.server_uuid,
+				"name": self.game_name,
+				"nickname": self.nickname}
+		event = pygame.event.Event(be.E_STATE, d)
+		pygame.event.post(event)
+
+		self.hide_all()
+		self.renderer.color = (0, 0, 0, 0)
+
+	def do_start_joined(self):
+		"""
+		Start a joined game.
+		"""
 		d = {"state": be.S_GAME,
 				"hosting": False,
-				"name": item.server.name,
-				"num_players": item.server.num_players,
-				"boardsize": item.server.boardsize}
+				"uuid": None,
+				"name": self.game_name,
+				"nickname": self.nickname,
+				"num_players": self.num_players,
+				"boardsize": self.boardsize}
 		event = pygame.event.Event(be.E_STATE, d)
+		pygame.event.post(event)
 
 		self.hide_all()
 		self.renderer.color = (0, 0, 0, 0)
