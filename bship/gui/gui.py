@@ -14,11 +14,13 @@ class GUI():
 
 	def __init__(self, renderer):
 		self.renderer = renderer
+		self.lobby_visible = False
 
 	def hide_all(self):
 		"""
 		Hide all widgets.
 		"""
+		self.lobby_visible = False
 		self.renderer.clear()
 
 	def show_lobby(self):
@@ -59,6 +61,8 @@ class GUI():
 		self.renderer.add_widget(self.e_nickname)
 		self.renderer.add_widget(self.b_create)
 		self.renderer.add_widget(self.b_join)
+		
+		self.lobby_visible = True
 
 	def show_create(self):
 		"""
@@ -163,6 +167,12 @@ class GUI():
 		"""
 		Process the announcements collected from the message queue.
 		"""
+		# Note that events may be late.
+		# However, mustn't work on widgets that are being
+		# garbage collected.
+		if not self.lobby_visible:
+			return
+
 		num_servers = 0
 		for key, val in serverlist.iteritems():
 			# Either update an existing list item.
